@@ -1,5 +1,6 @@
 #include <sstream>
 #include <iostream>
+#include <cstring>
 
 #include "sdlcompat.hh"
 
@@ -131,17 +132,23 @@ class KeyDisplay {
   int numKeys;
   bool *buttons;
   int numButtons, maxButtons;
+  int axes[256];
+  int numAxes;
 
   void drawText(const char *text, int offset);
 public:
-  inline KeyDisplay(Video &video, const char **keys, int numKeys, bool *buttons, int numButtons):
+  inline KeyDisplay(Video &video, const char **keys, int numKeys, bool *buttons, int numButtons, int numAxes):
       video(video),
       keys(keys), numKeys(numKeys),
-      buttons(buttons), numButtons(numButtons), maxButtons(0) {
+      buttons(buttons), numButtons(numButtons), maxButtons(0), numAxes(numAxes) {
+    memset(axes, 0, sizeof(axes));
   }
   void displayString(const char *text, float progress, int hat);
   inline void setMaxButtons(int val) {
     maxButtons = val;
+  }
+  inline void setAxis(int index, int value) {
+    axes[index] = value;
   }
 };
 
@@ -226,10 +233,10 @@ void KeyDisplay::displayString(const char *text, float progress, int hat) {
 #ifdef FLIP
     0,
 #else
-    screen->getHeight() - 32,
+    screen->getHeight() - 8,
 #endif
     width,
-    32,
+    8,
     mainColor
   );
 
@@ -270,6 +277,23 @@ void KeyDisplay::displayString(const char *text, float progress, int hat) {
       screen->fill(x+w-1, y, 1, h, mainColor);
       screen->fill(x, y+h-1, w, 1, mainColor);
     }
+  }
+
+  int numRows = (numAxes + 7) / 8;
+  int numCols = numAxes < 8 ? numAxes / 2 : 4;
+  for (int i = 0; i < numAxes; i += 2) {
+    int w = rw * 15 / 8;
+    int h = rh * 15 / 8;
+    int x = (screen->getWidth() / 2 - numCols * rw) / 2 + rw * (i & 7);
+    int y = (screen->getHeight() * 3 / 4) - numRows * rh + 2 * rh * (i >> 3);
+    int dx = (axes[i] * w / 32768 + w) / 2;
+    int dy = (axes[i + 1] * h / 32768 + h) / 2;
+    screen->fill(x, y, 1, h, mainColor);
+    screen->fill(x, y, w, 1, mainColor);
+    screen->fill(x+w-1, y, 1, h, mainColor);
+    screen->fill(x, y+h-1, w, 1, mainColor);
+
+    screen->fill(x + dx - rw / 8, y + dy - rh / 8, rw / 4, rh / 4, mainColor);
   }
 
   int keysDown = 0;
@@ -313,7 +337,7 @@ int main(int argc, char* argv[]) {
 
   // Set video mode
 #ifdef PORTRAIT
-  Video video(480, 640);
+  Video video(480, 640, 3);
 #else
   Video video(640, 480);
 #endif
@@ -344,7 +368,7 @@ int main(int argc, char* argv[]) {
 
   int lastDown = 0, downStride = 0;
 
-  KeyDisplay kd(video, keys, sizeof(keys)/sizeof(*keys), joyButtons, sizeof(joyButtons) / sizeof(*joyButtons));
+  KeyDisplay kd(video, keys, sizeof(keys)/sizeof(*keys), joyButtons, sizeof(joyButtons) / sizeof(*joyButtons), SDL_JoystickNumAxes(joy));
   kd.setMaxButtons(SDL_JoystickNumButtons(joy));
   kd.displayString("", 0.0f, 0);
   std::string textToDisplay;
@@ -354,6 +378,10 @@ int main(int argc, char* argv[]) {
     int downCode = 0;
     if (event.type == SDL_QUIT) {
       running = false;
+    } else if (event.type == SDL_JOYAXISMOTION) {
+      SDL_JoyAxisEvent &axisEvent(event.jaxis);
+      kd.setAxis(axisEvent.axis, axisEvent.value);
+      needUpdate = true;
     } else if (event.type == SDL_JOYHATMOTION) {
       SDL_JoyHatEvent &hat(event.jhat);
       if (hat.value) {
