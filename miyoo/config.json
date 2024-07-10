@@ -1,0 +1,6 @@
+{
+	"label":	"SDLKeyDisplay",
+	"icon":	    "icon.png",
+	"launch":	"SDLKeyDisplay",
+	"description":	"Display the key being pressed"
+}
