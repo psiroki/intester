@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "sdlcompat.hh"
+#include "font.h"
 
 SDL_Color color = {0xb5, 0x7e, 0xdc}; // Lavender color
 
@@ -134,14 +135,18 @@ class KeyDisplay {
   int numButtons, maxButtons;
   int axes[256];
   int numAxes;
+  int mouseX, mouseY;
+  int numHats;
 
   void drawText(const char *text, int offset);
 public:
-  inline KeyDisplay(Video &video, const char **keys, int numKeys, bool *buttons, int numButtons, int numAxes):
+  inline KeyDisplay(Video &video, const char **keys, int numKeys, bool *buttons, int numButtons, int numAxes, int numHats):
       video(video),
       keys(keys), numKeys(numKeys),
-      buttons(buttons), numButtons(numButtons), maxButtons(0), numAxes(numAxes) {
+      buttons(buttons), numButtons(numButtons), maxButtons(0), numAxes(numAxes), numHats(numHats) {
     memset(axes, 0, sizeof(axes));
+    mouseX = video.getScreen()->getWidth() * 2;
+    mouseY = video.getScreen()->getHeight() * 2;
   }
   void displayString(const char *text, float progress, int hat);
   inline void setMaxButtons(int val) {
@@ -149,6 +154,10 @@ public:
   }
   inline void setAxis(int index, int value) {
     axes[index] = value;
+  }
+  inline void setMouseMovement(int x, int y) {
+    mouseX = x;
+    mouseY = y;
   }
 };
 
@@ -228,7 +237,7 @@ void KeyDisplay::displayString(const char *text, float progress, int hat) {
 
   uint32_t mainColor = (255u << 24)|color.b|(color.g << 8)|(color.r << 16);
 
-  Uint16 width = progress * screen->getWidth();
+  int width = progress * screen->getWidth();
   screen->fill((screen->getWidth() - width) >> 1,
 #ifdef FLIP
     0,
@@ -263,19 +272,21 @@ void KeyDisplay::displayString(const char *text, float progress, int hat) {
     }
   }
 
-  for (int i = 0; i < 4; ++i) {
-    int index = directions[i];
-    int x = rw * (index % 3) + screen->getWidth() - rw * 3 - 8;
-    int y = 8 + rh * (index / 3);
-    int w = rw + 1;
-    int h = rh + 1;
-    if ((hat >> i) & 1) {
-      screen->fill(x, y, w, h, mainColor);
-    } else {
-      screen->fill(x, y, 1, h, mainColor);
-      screen->fill(x, y, w, 1, mainColor);
-      screen->fill(x+w-1, y, 1, h, mainColor);
-      screen->fill(x, y+h-1, w, 1, mainColor);
+  if (numHats > 0) {
+    for (int i = 0; i < 4; ++i) {
+      int index = directions[i];
+      int x = rw * (index % 3) + screen->getWidth() - rw * 3 - 8;
+      int y = 8 + rh * (index / 3);
+      int w = rw + 1;
+      int h = rh + 1;
+      if ((hat >> i) & 1) {
+        screen->fill(x, y, w, h, mainColor);
+      } else {
+        screen->fill(x, y, 1, h, mainColor);
+        screen->fill(x, y, w, 1, mainColor);
+        screen->fill(x+w-1, y, 1, h, mainColor);
+        screen->fill(x, y+h-1, w, 1, mainColor);
+      }
     }
   }
 
@@ -295,6 +306,11 @@ void KeyDisplay::displayString(const char *text, float progress, int hat) {
 
     screen->fill(x + dx - rw / 8, y + dy - rh / 8, rw / 4, rh / 4, mainColor);
   }
+
+  int mx = screen->getWidth() / 2 + mouseX;
+  int my = screen->getHeight() / 2 + mouseY;
+  screen->fill(mx - 4, my, 9, 1, mainColor);
+  screen->fill(mx, my - 4, 1, 9, mainColor);
 
   int keysDown = 0;
   for (int i = 0; i < numKeys; ++i) {
@@ -325,8 +341,14 @@ int main(int argc, char* argv[]) {
   }
 
   SDL_ShowCursor(false);
+#ifdef USE_SDL2
+  SDL_SetRelativeMouseMode(SDL_TRUE);
+#else
+  SDL_WM_GrabInput(SDL_GRAB_ON);
+#endif
   
   SDL_JoystickEventState(SDL_ENABLE);
+  std::cout << "Number of joysticks: " << SDL_NumJoysticks() << std::endl;
   SDL_Joystick *joy = SDL_JoystickOpen(0);
 
   if (TTF_Init() < 0) {
@@ -337,7 +359,7 @@ int main(int argc, char* argv[]) {
 
   // Set video mode
 #ifdef PORTRAIT
-  Video video(480, 640, 3);
+  Video video(640, 480, 3);
 #else
   Video video(640, 480);
 #endif
@@ -349,8 +371,9 @@ int main(int argc, char* argv[]) {
     return 3;
   }
 
-  // Load font
-  font = TTF_OpenFont("assets/RussoOne-Regular.ttf", 32);
+  SDL_RWops *ttf = SDL_RWFromConstMem(RussoOne_Regular_ttf, RussoOne_Regular_ttf_len);
+  // Load font (the second parameter value will tell to free the rwops instance)
+  font = TTF_OpenFontRW(ttf, 1, 32);
   if (!font) {
     perror("Can't load font");
     SDL_Quit();
@@ -368,16 +391,21 @@ int main(int argc, char* argv[]) {
 
   int lastDown = 0, downStride = 0;
 
-  KeyDisplay kd(video, keys, sizeof(keys)/sizeof(*keys), joyButtons, sizeof(joyButtons) / sizeof(*joyButtons), SDL_JoystickNumAxes(joy));
+  KeyDisplay kd(video, keys, sizeof(keys)/sizeof(*keys), joyButtons, sizeof(joyButtons) / sizeof(*joyButtons), SDL_JoystickNumAxes(joy), SDL_JoystickNumHats(joy));
   kd.setMaxButtons(SDL_JoystickNumButtons(joy));
   kd.displayString("", 0.0f, 0);
   std::string textToDisplay;
-  while (running && SDL_WaitEvent(&event)) {
+  bool eventPending = false;
+  bool needUpdate = false;
+  while (running && (eventPending || SDL_WaitEvent(&event))) {
+    eventPending = false;
     video.present();
-    bool needUpdate = false;
     int downCode = 0;
     if (event.type == SDL_QUIT) {
       running = false;
+    } else if (event.type == SDL_MOUSEMOTION) {
+      kd.setMouseMovement(event.motion.xrel, event.motion.yrel);
+      needUpdate = true;
     } else if (event.type == SDL_JOYAXISMOTION) {
       SDL_JoyAxisEvent &axisEvent(event.jaxis);
       kd.setAxis(axisEvent.axis, axisEvent.value);
@@ -446,13 +474,23 @@ int main(int argc, char* argv[]) {
       lastDown = downCode;
     }
     if (downStride == 3) running = false;
-    if (needUpdate) kd.displayString(textToDisplay.c_str(), (downStride - 1) / 2.0f, lastHat);
+    if (SDL_PollEvent(&event)) {
+      eventPending = true;
+    } else {
+      // only repaint when idle
+      if (needUpdate) {
+        int ds = downStride - 1;
+        if (ds < 0) ds = 0;
+        kd.displayString(textToDisplay.c_str(), ds / 2.0f, lastHat);
+        needUpdate = false;
+      }
+    }
   }
 
   // Clean up
   TTF_CloseFont(font);
   TTF_Quit();
-  SDL_Quit();
+//  SDL_Quit();
 
   return 0;
 }
