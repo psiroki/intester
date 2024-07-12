@@ -188,11 +188,14 @@ Video::~Video() {
 }
 
 VideoSurface* Video::createSurface(int w, int h) {
-  return new VideoSurface(SDL_CreateRGBSurface(0, w, h, 32,
+  SDL_Surface *s = SDL_CreateRGBSurface(0, w, h, 32,
       screen->surface->format->Rmask,
       screen->surface->format->Gmask,
       screen->surface->format->Bmask,
-      screen->surface->format->Amask));
+      screen->surface->format->Amask);
+  SDL_Surface *withAlpha = SDL_DisplayFormatAlpha(s);
+  SDL_FreeSurface(s);
+  return new VideoSurface(withAlpha);
 }
 
 VideoSurface* Video::drawText(TTF_Font *font, const char *str, SDL_Color color) {
